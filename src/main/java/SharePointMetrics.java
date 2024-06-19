@@ -6,6 +6,10 @@ import com.microsoft.graph.requests.GraphServiceClient;
 import okhttp3.Request;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class SharePointMetrics {
@@ -15,7 +19,7 @@ public class SharePointMetrics {
     private static final String SITE_ID = "ebrd0.sharepoint.com,e2ada248-c67d-49af-9f00-489ff62d0103,2cb48d6b-2a26-4592-ac40-5f05e5758a69"; // Replace with your actual site ID
     private static final String DOCUMENT_LIBRARY_ID = "b!SKKt4n3Gr0mfAEif9i0BA2uNtCwmKpJFrEBfBeV1immyu_113jstQrIvoR0ENrqE"; // Replace with your actual document library ID
     private static final String FOLDER_PATH = "/General/COUNTRY"; // Replace with the folder path you want to analyze
-
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(16);
     public static void main(String[] args) {
         try {
             // Authenticate using Device Code Flow
@@ -40,13 +44,27 @@ public class SharePointMetrics {
                 // Initialize counters
                 AtomicLong fileCount = new AtomicLong(0);
                 AtomicLong totalSize = new AtomicLong(0);
+                CountDownLatch latch = new CountDownLatch(1);
+
 
                 // Traverse folder and accumulate metrics
-                traverseFolder(graphClient, DOCUMENT_LIBRARY_ID, folderId, fileCount, totalSize);
+                executorService.submit(() -> {
+                    try {
+                        traverseFolder(graphClient, DOCUMENT_LIBRARY_ID, folderId, fileCount, totalSize);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+
+                // Wait for all tasks to complete
+                latch.await();
 
                 // Print results
                 System.out.println("Total number of files: " + fileCount.get());
                 System.out.println("Total size of files: " + totalSize.get() + " bytes");
+                // Shutdown the executor service
+                executorService.shutdown();
+                executorService.awaitTermination(1, TimeUnit.MINUTES);
             } else {
                 System.err.println("Folder not found: " + FOLDER_PATH);
             }
@@ -64,16 +82,27 @@ public class SharePointMetrics {
                 .buildRequest()
                 .get()
                 .getCurrentPage();
-
+        CountDownLatch latch = new CountDownLatch(items.size());
         for (DriveItem item : items) {
             if (item.file != null) {
                 fileCount.incrementAndGet();
                 totalSize.addAndGet(item.size);
+                latch.countDown();
             } else if (item.folder != null) {
-                traverseFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
-                System.out.println("In Progress number of files.....: " + fileCount.get());
-                System.out.println("In Progress Total size of files....: " + ( totalSize.get() / (1024.0 * 1024.0)) + " bytes");
+                executorService.submit(() -> {
+                    try {
+                        traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
             }
+        }
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -91,5 +120,26 @@ public class SharePointMetrics {
             e.printStackTrace();
             return null;
         }
+    }
+    private static void traverseNestedFolder(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderId, AtomicLong fileCount, AtomicLong totalSize) {
+        List<DriveItem> items = graphClient.sites(SITE_ID)
+                .drives(documentLibraryId)
+                .items(folderId)
+                .children()
+                .buildRequest()
+                .get()
+                .getCurrentPage();
+
+        for (DriveItem item : items) {
+            if (item.file != null) {
+                fileCount.incrementAndGet();
+                totalSize.addAndGet(item.size);
+            } else if (item.folder != null) {
+                traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
+
+            }
+        }
+        System.out.println("In Progress number of files.....: " + fileCount.get());
+        System.out.println("In Progress Total size of files....: " + ( totalSize.get() / (1024.0 * 1024.0)) + " MB");
     }
 }
