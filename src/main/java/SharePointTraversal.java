@@ -1,15 +1,13 @@
 import com.azure.identity.DeviceCodeCredential;
 import com.azure.identity.DeviceCodeCredentialBuilder;
+import com.azure.identity.UsernamePasswordCredential;
+import com.azure.identity.UsernamePasswordCredentialBuilder;
 import com.microsoft.graph.authentication.TokenCredentialAuthProvider;
 import com.microsoft.graph.models.DriveItem;
 import com.microsoft.graph.requests.GraphServiceClient;
 import okhttp3.Request;
 
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class SharePointTraversal {
 
@@ -19,12 +17,8 @@ public class SharePointTraversal {
     private static final String DOCUMENT_LIBRARY_ID = "b!SKKt4n3Gr0mfAEif9i0BA2uNtCwmKpJFrEBfBeV1immyu_113jstQrIvoR0ENrqE"; // Replace with your actual document library ID
     private static final String FOLDER_PATH = "/General/COUNTRY"; // Replace with the folder path you want to start from
 
-    private static final int THREAD_POOL_SIZE = 10; // Adjust the thread pool size as needed
-    private static final AtomicInteger fileCount = new AtomicInteger(0);
 
     public static void main(String[] args) {
-        ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-
         try {
             // Authenticate using Device Code Flow
             DeviceCodeCredential deviceCodeCredential = new DeviceCodeCredentialBuilder()
@@ -41,30 +35,64 @@ public class SharePointTraversal {
                     .authenticationProvider(authProvider)
                     .buildClient();
 
+            // Traverse document library
+//            traverseDocumentLibrary(graphClient, DOCUMENT_LIBRARY_ID);
+
+
             // Get folder ID by path
             String folderId = getFolderIdByPath(graphClient, DOCUMENT_LIBRARY_ID, FOLDER_PATH);
 
             // Traverse document library from the specified folder
             if (folderId != null) {
-                traverseFolder(graphClient, DOCUMENT_LIBRARY_ID, folderId, FOLDER_PATH, executorService);
+                traverseFolder(graphClient, DOCUMENT_LIBRARY_ID, folderId,FOLDER_PATH);
             } else {
                 System.err.println("Folder not found: " + FOLDER_PATH);
             }
         } catch (Exception e) {
             System.err.println("Authentication failed: " + e.getMessage());
             e.printStackTrace();
-        } finally {
-            executorService.shutdown();
-            try {
-                if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                    executorService.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                executorService.shutdownNow();
-            }
         }
     }
 
+//    private static void traverseDocumentLibrary(GraphServiceClient<Request> graphClient, String documentLibraryId) {
+//        // Get root items of the document library
+//        List<DriveItem> rootItems = graphClient.sites(SITE_ID)
+//                .drives(documentLibraryId)
+//                .root()
+//                .children()
+//                .buildRequest()
+//                .get()
+//                .getCurrentPage();
+//
+//        // Traverse each item
+//        for (DriveItem item : rootItems) {
+//            traverseItem(graphClient, documentLibraryId, item);
+//        }
+//    }
+
+    private static void traverseItem(GraphServiceClient<Request> graphClient, String documentLibraryId, DriveItem item, String currentPath) {
+        String itemPath = currentPath + "/" + item.name;
+
+        // If item is a file, print its name and path
+        if (item.file != null) {
+            System.out.println("File: " + item.name + " Path: " + itemPath);
+        }
+
+        // If item is a folder, recursively traverse its children
+        if (item.folder != null) {
+            List<DriveItem> children = graphClient.sites(SITE_ID)
+                    .drives(documentLibraryId)
+                    .items(item.id)
+                    .children()
+                    .buildRequest()
+                    .get()
+                    .getCurrentPage();
+
+            for (DriveItem child : children) {
+                traverseItem(graphClient, documentLibraryId, child, itemPath);
+            }
+        }
+    }
     private static String getFolderIdByPath(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderPath) {
         try {
             DriveItem folder = graphClient.sites(SITE_ID)
@@ -80,8 +108,7 @@ public class SharePointTraversal {
             return null;
         }
     }
-
-    private static void traverseFolder(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderId, String currentPath, ExecutorService executorService) {
+    private static void traverseFolder(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderId, String currentPath) {
         // Get items of the specified folder
         List<DriveItem> items = graphClient.sites(SITE_ID)
                 .drives(documentLibraryId)
@@ -93,37 +120,7 @@ public class SharePointTraversal {
 
         // Traverse each item
         for (DriveItem item : items) {
-            executorService.submit(() -> traverseItem(graphClient, documentLibraryId, item, currentPath, executorService));
-        }
-    }
-
-    private static void traverseItem(GraphServiceClient<Request> graphClient, String documentLibraryId, DriveItem item, String currentPath, ExecutorService executorService) {
-        String itemPath = currentPath + "/" + item.name;
-
-        // If item is a file, print its name and path
-        if (item.file != null) {
-            int count = fileCount.incrementAndGet();
-            System.out.println("File: " + item.name + " Path: " + itemPath);
-
-            // Print the file count every 10 files
-            if (count % 10 == 0) {
-                System.out.println("Number of files processed: " + count);
-            }
-        }
-
-        // If item is a folder, recursively traverse its children
-        if (item.folder != null) {
-            List<DriveItem> children = graphClient.sites(SITE_ID)
-                    .drives(documentLibraryId)
-                    .items(item.id)
-                    .children()
-                    .buildRequest()
-                    .get()
-                    .getCurrentPage();
-
-            for (DriveItem child : children) {
-                executorService.submit(() -> traverseItem(graphClient, documentLibraryId, child, itemPath, executorService));
-            }
+            traverseItem(graphClient, documentLibraryId, item, currentPath);
         }
     }
 }
