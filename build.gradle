@@ -10,7 +10,7 @@ repositories {
     mavenCentral()
 }
 application {
-    mainClass.set('SharePointMetrics')
+    mainClass.set('SharePointTraversFolders')
 }
 dependencies {
     // Microsoft Graph SDK

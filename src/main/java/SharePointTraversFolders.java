@@ -6,6 +6,9 @@ import com.microsoft.graph.requests.DriveItemCollectionPage;
 import com.microsoft.graph.requests.GraphServiceClient;
 import okhttp3.Request;
 
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -19,12 +22,16 @@ public class SharePointTraversFolders {
     private static final String TENANT_ID = "172f4752-6874-4876-bad5-e6d61f991171"; // Replace with your actual tenant ID
     private static final String SITE_ID = "ebrd0.sharepoint.com,e2ada248-c67d-49af-9f00-489ff62d0103,2cb48d6b-2a26-4592-ac40-5f05e5758a69"; // Replace with your actual site ID
     private static final String DOCUMENT_LIBRARY_ID = "b!SKKt4n3Gr0mfAEif9i0BA2uNtCwmKpJFrEBfBeV1immyu_113jstQrIvoR0ENrqE"; // Replace with your actual document library ID
-    private static final String FOLDER_PATH = "/General/COUNTRY/EGYPT (EG)"; // Replace with the folder path you want to analyze
-    private static final ExecutorService executorService = Executors.newFixedThreadPool(8);
+    private static final String FOLDER_PATH = "/General/COUNTRY"; // Replace with the folder path you want to analyze
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(6);
     private static final AtomicLong folderCount = new AtomicLong(0); // Static folder counter
+    private static PrintWriter csvWriter;
 
     public static void main(String[] args) {
         try {
+            csvWriter = new PrintWriter(new FileWriter("d:\\folders.csv"));
+            csvWriter.println("Folder Path");
+
             // Authenticate using Device Code Flow
             DeviceCodeCredential deviceCodeCredential = new DeviceCodeCredentialBuilder()
                     .clientId(CLIENT_ID)
@@ -51,7 +58,7 @@ public class SharePointTraversFolders {
                 // Traverse folder and accumulate metrics
                 executorService.submit(() -> {
                     try {
-                        traverseFolder(graphClient, DOCUMENT_LIBRARY_ID, folderId, fileCount, totalSize, FOLDER_PATH);
+                        traverseFolder(graphClient, DOCUMENT_LIBRARY_ID, folderId, fileCount, totalSize, "");
                     } finally {
                         latch.countDown();
                     }
@@ -64,6 +71,9 @@ public class SharePointTraversFolders {
                 System.out.println("Total number of files: " + fileCount.get());
                 System.out.println("Total size of files: " + totalSize.get() + " bytes");
                 System.out.println("Total number of folders: " + folderCount.get());
+
+                // Close the CSV writer
+                csvWriter.close();
 
                 // Shutdown the executor service
                 executorService.shutdown();
@@ -95,6 +105,7 @@ public class SharePointTraversFolders {
                 } else if (item.folder != null) {
                     folderCount.incrementAndGet();
                     String newPath = currentPath + "/" + item.name;
+                    writeFolderPathToCSV(newPath);
                     System.out.println(newPath);
 
                     executorService.submit(() -> {
@@ -112,7 +123,6 @@ public class SharePointTraversFolders {
                 Thread.currentThread().interrupt();
             }
             currentPage = currentPage.getNextPage() != null ? currentPage.getNextPage().buildRequest().get() : null;
-
         }
         System.out.println("In progress number of folders: " + folderCount.get());
     }
@@ -133,6 +143,7 @@ public class SharePointTraversFolders {
                 } else if (item.folder != null) {
                     folderCount.incrementAndGet();
                     String newPath = currentPath + "/" + item.name;
+                    writeFolderPathToCSV(newPath);
                     System.out.println(newPath);
                     traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize, newPath);
                 }
@@ -142,6 +153,10 @@ public class SharePointTraversFolders {
 
         // Print the in-progress folder count
         System.out.println("In progress number of folders: " + folderCount.get());
+    }
+
+    private static void writeFolderPathToCSV(String folderPath) {
+        csvWriter.println(folderPath);
     }
 
     private static String getFolderIdByPath(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderPath) {
