@@ -2,6 +2,7 @@ import com.azure.identity.DeviceCodeCredential;
 import com.azure.identity.DeviceCodeCredentialBuilder;
 import com.microsoft.graph.authentication.TokenCredentialAuthProvider;
 import com.microsoft.graph.models.DriveItem;
+import com.microsoft.graph.requests.DriveItemCollectionPage;
 import com.microsoft.graph.requests.GraphServiceClient;
 import okhttp3.Request;
 
@@ -19,7 +20,10 @@ public class SharePointMetrics {
     private static final String SITE_ID = "ebrd0.sharepoint.com,e2ada248-c67d-49af-9f00-489ff62d0103,2cb48d6b-2a26-4592-ac40-5f05e5758a69"; // Replace with your actual site ID
     private static final String DOCUMENT_LIBRARY_ID = "b!SKKt4n3Gr0mfAEif9i0BA2uNtCwmKpJFrEBfBeV1immyu_113jstQrIvoR0ENrqE"; // Replace with your actual document library ID
     private static final String FOLDER_PATH = "/General/COUNTRY"; // Replace with the folder path you want to analyze
-    private static final ExecutorService executorService = Executors.newFixedThreadPool(16);
+    //private static final String FOLDER_PATH = "/General/COUNTRY/RUSSIA (RU)/ANC 35275"; // Replace with the folder path you want to analyze
+//private static final String FOLDER_PATH = "/General/COUNTRY/RUSSIA (RU)/AUT 2210"; // Replace with the folder path you want to analyze
+//    private static final String FOLDER_PATH = "/General/COUNTRY/ALBANIA (AL)/KVS 52361"; // Replace with the folder path you want to analyze
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(8);
     public static void main(String[] args) {
         try {
             // Authenticate using Device Code Flow
@@ -65,6 +69,8 @@ public class SharePointMetrics {
                 // Shutdown the executor service
                 executorService.shutdown();
                 executorService.awaitTermination(1, TimeUnit.MINUTES);
+
+
             } else {
                 System.err.println("Folder not found: " + FOLDER_PATH);
             }
@@ -75,34 +81,36 @@ public class SharePointMetrics {
     }
 
     private static void traverseFolder(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderId, AtomicLong fileCount, AtomicLong totalSize) {
-        List<DriveItem> items = graphClient.sites(SITE_ID)
+        DriveItemCollectionPage currentPage = graphClient.sites(SITE_ID)
                 .drives(documentLibraryId)
                 .items(folderId)
                 .children()
                 .buildRequest()
-                .get()
-                .getCurrentPage();
-        CountDownLatch latch = new CountDownLatch(items.size());
-        for (DriveItem item : items) {
-            if (item.file != null) {
-                fileCount.incrementAndGet();
-                totalSize.addAndGet(item.size);
-                latch.countDown();
-            } else if (item.folder != null) {
-                executorService.submit(() -> {
-                    try {
-                        traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
-                    } finally {
-                        latch.countDown();
-                    }
-                });
-            }
-        }
+                .get();
 
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        while(currentPage!=null){
+            CountDownLatch latch = new CountDownLatch(currentPage.getCurrentPage().size());
+            for (DriveItem item : currentPage.getCurrentPage()) {
+                if (item.file != null) {
+                    fileCount.incrementAndGet();
+                    totalSize.addAndGet(item.size);
+                    latch.countDown();
+                } else if (item.folder != null) {
+                    executorService.submit(() -> {
+                        try {
+                            traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
+                        } finally {
+                            latch.countDown();
+                        }
+                    });
+                }
+            }
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            currentPage = currentPage.getNextPage() != null ? currentPage.getNextPage().buildRequest().get() : null;
         }
     }
 
@@ -122,23 +130,34 @@ public class SharePointMetrics {
         }
     }
     private static void traverseNestedFolder(GraphServiceClient<Request> graphClient, String documentLibraryId, String folderId, AtomicLong fileCount, AtomicLong totalSize) {
-        List<DriveItem> items = graphClient.sites(SITE_ID)
+//        List<DriveItem> items = graphClient.sites(SITE_ID)
+//                .drives(documentLibraryId)
+//                .items(folderId)
+//                .children()
+//                .buildRequest()
+//                .get()
+//                .getCurrentPage();
+        DriveItemCollectionPage currentPage = graphClient.sites(SITE_ID)
                 .drives(documentLibraryId)
                 .items(folderId)
                 .children()
                 .buildRequest()
-                .get()
-                .getCurrentPage();
+                .get();
 
-        for (DriveItem item : items) {
-            if (item.file != null) {
-                fileCount.incrementAndGet();
-                totalSize.addAndGet(item.size);
-            } else if (item.folder != null) {
-                traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
+        while (currentPage!=null){
+            for (DriveItem item : currentPage.getCurrentPage()) {
+                if (item.file != null) {
+                    fileCount.incrementAndGet();
+                    totalSize.addAndGet(item.size);
+                } else if (item.folder != null) {
+                    traverseNestedFolder(graphClient, documentLibraryId, item.id, fileCount, totalSize);
 
+                }
             }
+            currentPage = currentPage.getNextPage() != null ? currentPage.getNextPage().buildRequest().get() : null;
+
         }
+
         System.out.println("In Progress number of files.....: " + fileCount.get());
         System.out.println("In Progress Total size of files....: " + ( totalSize.get() / (1024.0 * 1024.0)) + " MB");
     }
